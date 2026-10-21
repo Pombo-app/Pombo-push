@@ -37,6 +37,8 @@ const config = {
     powDifficulty: parseInt(process.env.POW_DIFFICULTY || '4'),
     pushStreamId: process.env.PUSH_STREAM_ID || 'pombo/push/notifications',
     wakeRatePerMinute: parseInt(process.env.WAKE_RATE_PER_MINUTE || '20'),
+    statsRetentionDays: parseInt(process.env.STATS_RETENTION_DAYS || '30'),
+    registrationTtlDays: parseInt(process.env.REGISTRATION_TTL_DAYS || '180')
 };
 
 // ============================================
@@ -728,6 +730,28 @@ setInterval(() => {
     console.log(`📊 Stats: ${stats.registrations} devices, ${stats.pushesToday} pushes (24h)`);
     wakeGuard.sweep();
 }, 60000);
+
+function purgeOldRows() {
+    try {
+        const stats = db.prepare(
+            `DELETE FROM stats WHERE created_at < strftime('%s', 'now', ?)`
+        ).run(`-${config.statsRetentionDays} days`);
+        let registrations = { changes: 0 };
+        if (config.registrationTtlDays > 0) {
+            registrations = db.prepare(
+                `DELETE FROM registrations WHERE updated_at < strftime('%s', 'now', ?)`
+            ).run(`-${config.registrationTtlDays} days`);
+        }
+        if (stats.changes || registrations.changes) {
+            console.log(`🧹 Purged ${stats.changes} stats rows, ${registrations.changes} stale registrations`);
+        }
+    } catch (e) {
+        console.error('❌ Purge failed:', e.message);
+    }
+}
+
+purgeOldRows();
+setInterval(purgeOldRows, 3600000);
 
 // Health check - verify relay is still connected (every 5 minutes)
 // Just informational, not alarming - low traffic is normal

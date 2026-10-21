@@ -38,6 +38,8 @@ npm start
 | `ADMIN_PORT` | no | Admin API port (default `8000`; set `0` to disable the admin API entirely) |
 | `ADMIN_HOST` | no | Interface the admin API binds to (default `127.0.0.1`) |
 | `WAKE_RATE_PER_MINUTE` | no | Wakes delivered per tag per minute (default `20`); excess wakes are coalesced into one later push, not dropped |
+| `STATS_RETENTION_DAYS` | no | Days kept in the `stats` table (default `30`) |
+| `REGISTRATION_TTL_DAYS` | no | Registrations not refreshed for this many days are deleted (default `180`; `0` keeps them forever). Clients refresh while the app runs |
 | `FCM_SERVICE_ACCOUNT` | no | Path to (or inline JSON of) a Firebase service-account key. Enables native FCM push for the Android app. Without it, the relay serves Web Push clients exactly as before and rejects native registrations. **This key is a secret — keep it outside the repo folder and never commit it** |
 
 VAPID keys are the relay's identity to browsers: if you rotate them, every device must re-register for push. Back up your `.env` and `data/tokens.db`.
