@@ -72,7 +72,7 @@ With PM2 (recommended):
 
 ```bash
 npm install -g pm2
-pm2 start index.js --name pombo-relay
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup
 ```
@@ -83,7 +83,7 @@ Even at maximum priority, Android may delay push delivery by minutes when the de
 
 ## Requirements
 
-- **Node.js** 18+
+- **Node.js** 20.19+
 - **RAM** ~50–100 MB
 - **Disk** ~100 MB (SQLite is embedded — no database server)
 - **Network** stable internet connection

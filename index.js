@@ -763,7 +763,7 @@ setInterval(() => {
     const minutes = Math.round(timeSinceLastMessage / 60);
     
     // Only warn if no messages for 30+ minutes - that might indicate a real problem
-    if (timeSinceLastMessage > 1800000) {
+    if (timeSinceLastMessage > 1800) {
         console.warn(`⚠️  No messages for 30+ minutes (${minutes} min) - check if relay is still receiving data`);
         logEvent('health_check_warning', `no_messages_${minutes}min`);
     } else {
