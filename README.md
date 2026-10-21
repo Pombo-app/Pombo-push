@@ -34,7 +34,12 @@ npm start
 | `VAPID_EMAIL` | no | Contact email included in push requests |
 | `POW_DIFFICULTY` | no | Proof-of-Work requirement for wake signals (default `4` = hash starts with `0000`) |
 | `PUSH_STREAM_ID` | no | Streamr stream to listen on. The code default is a placeholder: with it the relay starts cleanly, listens to an empty stream, and never delivers anything — set it to the live Pombo push stream |
+| `ADMIN_TOKEN` | no | Bearer token for the admin API. Without it the admin API does not start |
 | `ADMIN_PORT` | no | Admin API port (default `8000`; set `0` to disable the admin API entirely) |
+| `ADMIN_HOST` | no | Interface the admin API binds to (default `127.0.0.1`) |
+| `WAKE_RATE_PER_MINUTE` | no | Wakes delivered per tag per minute (default `20`); excess wakes are coalesced into one later push, not dropped |
+| `STATS_RETENTION_DAYS` | no | Days kept in the `stats` table (default `30`) |
+| `REGISTRATION_TTL_DAYS` | no | Registrations not refreshed for this many days are deleted (default `180`; `0` keeps them forever). Clients refresh while the app runs |
 | `FCM_SERVICE_ACCOUNT` | no | Path to (or inline JSON of) a Firebase service-account key. Enables native FCM push for the Android app. Without it, the relay serves Web Push clients exactly as before and rejects native registrations. **This key is a secret — keep it outside the repo folder and never commit it** |
 
 VAPID keys are the relay's identity to browsers: if you rotate them, every device must re-register for push. Back up your `.env` and `data/tokens.db`.
@@ -50,13 +55,16 @@ The diagram covers the two phases: **registration** (devices register their push
 ```bash
 # Check that the relay is working
 npm test
+
+# Unit tests
+npm run test:unit
 ```
 
 ## Administration
 
 The relay ships with an admin HTTP API (port `ADMIN_PORT`) and an offline CLI (`admin-cli.js`). See [ADMIN_COMMANDS.md](ADMIN_COMMANDS.md).
 
-⚠️ The admin API is unauthenticated and binds to all interfaces. Firewall the port to localhost, or set `ADMIN_PORT=0` and use the CLI instead.
+The admin API only starts when `ADMIN_TOKEN` is set, binds to `127.0.0.1` by default, and requires `Authorization: Bearer <ADMIN_TOKEN>` on every request. Leaving `ADMIN_TOKEN` unset and using the CLI is the safest option.
 
 ## Running in the background
 
@@ -64,7 +72,7 @@ With PM2 (recommended):
 
 ```bash
 npm install -g pm2
-pm2 start index.js --name pombo-relay
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup
 ```
@@ -75,7 +83,7 @@ Even at maximum priority, Android may delay push delivery by minutes when the de
 
 ## Requirements
 
-- **Node.js** 18+
+- **Node.js** 20.19+
 - **RAM** ~50–100 MB
 - **Disk** ~100 MB (SQLite is embedded — no database server)
 - **Network** stable internet connection

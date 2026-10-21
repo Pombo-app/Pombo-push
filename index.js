@@ -16,6 +16,7 @@ import path from 'path';
 import http from 'http';
 import nodeCrypto from 'crypto';
 import { EventEmitter } from 'events';
+import { createWakeGuard } from './wakeGuard.js';
 
 // Increase max listeners to prevent memory leak warnings from Streamr SDK
 // (Streamr creates many abort listeners internally)
@@ -34,7 +35,10 @@ const config = {
         email: process.env.VAPID_EMAIL || 'admin@example.com'
     },
     powDifficulty: parseInt(process.env.POW_DIFFICULTY || '4'),
-    pushStreamId: process.env.PUSH_STREAM_ID || 'pombo/push/notifications'
+    pushStreamId: process.env.PUSH_STREAM_ID || 'pombo/push/notifications',
+    wakeRatePerMinute: parseInt(process.env.WAKE_RATE_PER_MINUTE || '20'),
+    statsRetentionDays: parseInt(process.env.STATS_RETENTION_DAYS || '30'),
+    registrationTtlDays: parseInt(process.env.REGISTRATION_TTL_DAYS || '180')
 };
 
 // ============================================
@@ -67,6 +71,9 @@ function validateConfig() {
 }
 
 validateConfig();
+
+const wakeGuard = createWakeGuard({ ratePerMinute: config.wakeRatePerMinute });
+const deferredWakes = new Map();
 
 // ============================================
 // DATABASE (SQLite)
@@ -648,6 +655,25 @@ async function handleNotification(payload) {
             return;
         }
         
+        if (wakeGuard.isReplay(pow)) {
+            console.log(`⚠️  Replayed PoW for tag ${tag}`);
+            logEvent('pow_replay', tag);
+            return;
+        }
+        
+        await deliverWake(tag, channelType);
+    } catch (e) {
+        console.error('❌ Error processing notification:', e.message);
+        logEvent('notification_error', e.message);
+    }
+}
+
+/**
+ * Tags are shared by many channels, so a throttled wake is coalesced into one later
+ * push, never dropped; 'keys' and message wakes are handled differently by clients.
+ */
+async function deliverWake(tag, channelType) {
+    try {
         // Find tokens with this tag
         const tokens = db.prepare(
             'SELECT push_token FROM registrations WHERE tag = ?'
@@ -655,6 +681,20 @@ async function handleNotification(payload) {
         
         if (tokens.length === 0) {
             console.log(`❌ No tokens found for tag ${tag}`);
+            return;
+        }
+        
+        const deferKey = `${tag}|${channelType}`;
+        const waitMs = wakeGuard.take(tag);
+        if (waitMs > 0) {
+            if (!deferredWakes.has(deferKey)) {
+                console.log(`⏳ Wake for tag ${tag} deferred ${waitMs} ms (rate limit)`);
+                logEvent('wake_deferred', tag);
+                deferredWakes.set(deferKey, setTimeout(() => {
+                    deferredWakes.delete(deferKey);
+                    deliverWake(tag, channelType);
+                }, waitMs));
+            }
             return;
         }
         
@@ -688,7 +728,30 @@ async function handleNotification(payload) {
 setInterval(() => {
     const stats = getStats();
     console.log(`📊 Stats: ${stats.registrations} devices, ${stats.pushesToday} pushes (24h)`);
+    wakeGuard.sweep();
 }, 60000);
+
+function purgeOldRows() {
+    try {
+        const stats = db.prepare(
+            `DELETE FROM stats WHERE created_at < strftime('%s', 'now', ?)`
+        ).run(`-${config.statsRetentionDays} days`);
+        let registrations = { changes: 0 };
+        if (config.registrationTtlDays > 0) {
+            registrations = db.prepare(
+                `DELETE FROM registrations WHERE updated_at < strftime('%s', 'now', ?)`
+            ).run(`-${config.registrationTtlDays} days`);
+        }
+        if (stats.changes || registrations.changes) {
+            console.log(`🧹 Purged ${stats.changes} stats rows, ${registrations.changes} stale registrations`);
+        }
+    } catch (e) {
+        console.error('❌ Purge failed:', e.message);
+    }
+}
+
+purgeOldRows();
+setInterval(purgeOldRows, 3600000);
 
 // Health check - verify relay is still connected (every 5 minutes)
 // Just informational, not alarming - low traffic is normal
@@ -700,7 +763,7 @@ setInterval(() => {
     const minutes = Math.round(timeSinceLastMessage / 60);
     
     // Only warn if no messages for 30+ minutes - that might indicate a real problem
-    if (timeSinceLastMessage > 1800000) {
+    if (timeSinceLastMessage > 1800) {
         console.warn(`⚠️  No messages for 30+ minutes (${minutes} min) - check if relay is still receiving data`);
         logEvent('health_check_warning', `no_messages_${minutes}min`);
     } else {
@@ -713,11 +776,24 @@ setInterval(() => {
 // ============================================
 
 const ADMIN_PORT = process.env.ADMIN_PORT ? parseInt(process.env.ADMIN_PORT) : 8000;
+const ADMIN_HOST = process.env.ADMIN_HOST || '127.0.0.1';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 // Skip admin API if port is 0
 if (ADMIN_PORT === 0) {
     console.log('ℹ️  Admin API disabled (ADMIN_PORT=0)');
+} else if (!ADMIN_TOKEN) {
+    console.log('ℹ️  Admin API disabled (ADMIN_TOKEN not set)');
 } else {
+    const adminTokenHash = nodeCrypto.createHash('sha256').update(ADMIN_TOKEN).digest();
+
+    function isAuthorized(req) {
+        const match = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+        if (!match) return false;
+        const given = nodeCrypto.createHash('sha256').update(match[1]).digest();
+        return nodeCrypto.timingSafeEqual(given, adminTokenHash);
+    }
+
     function sendJSON(res, statusCode, data) {
         res.writeHead(statusCode, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(data, null, 2));
@@ -728,15 +804,8 @@ if (ADMIN_PORT === 0) {
     }
 
     const adminServer = http.createServer((req, res) => {
-        // Enable CORS
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-        
-        if (req.method === 'OPTIONS') {
-            res.writeHead(200);
-            res.end();
-            return;
+        if (!isAuthorized(req)) {
+            return sendError(res, 401, 'Unauthorized');
         }
         
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -849,11 +918,11 @@ if (ADMIN_PORT === 0) {
                     'GET /admin/help': 'This help message'
                 },
                 examples: {
-                    stats: `curl http://localhost:${ADMIN_PORT}/admin/stats`,
-                    listAll: `curl http://localhost:${ADMIN_PORT}/admin/registrations`,
-                    listTag: `curl "http://localhost:${ADMIN_PORT}/admin/registrations?tag=pombo/chat"`,
-                    events: `curl "http://localhost:${ADMIN_PORT}/admin/events?limit=100"`,
-                    delete: `curl -X DELETE http://localhost:${ADMIN_PORT}/admin/registrations/pombo/chat`
+                    stats: `curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:${ADMIN_PORT}/admin/stats`,
+                    listAll: `curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:${ADMIN_PORT}/admin/registrations`,
+                    listTag: `curl -H "Authorization: Bearer $ADMIN_TOKEN" "http://localhost:${ADMIN_PORT}/admin/registrations?tag=pombo/chat"`,
+                    events: `curl -H "Authorization: Bearer $ADMIN_TOKEN" "http://localhost:${ADMIN_PORT}/admin/events?limit=100"`,
+                    delete: `curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:${ADMIN_PORT}/admin/registrations/pombo/chat`
                 }
             });
         }
@@ -862,8 +931,8 @@ if (ADMIN_PORT === 0) {
         sendError(res, 404, 'Endpoint not found. Try /admin/help');
     });
 
-    adminServer.listen(ADMIN_PORT, () => {
-        console.log(`✅ Admin API listening on port ${ADMIN_PORT}`);
+    adminServer.listen(ADMIN_PORT, ADMIN_HOST, () => {
+        console.log(`✅ Admin API listening on ${ADMIN_HOST}:${ADMIN_PORT}`);
         console.log(`   Documentation: http://localhost:${ADMIN_PORT}/admin/help`);
     });
 

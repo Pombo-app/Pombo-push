@@ -4,16 +4,16 @@
 
 ### 1. **Admin HTTP API** (while relay is running)
 
-The relay now starts an **Admin API on port 8000** that you can query from any HTTP client.
+When `ADMIN_TOKEN` is set, the relay starts an **Admin API on `127.0.0.1:8000`**. Every request must carry `Authorization: Bearer <ADMIN_TOKEN>`; without the header, or with a wrong token, the API answers `401`. Without `ADMIN_TOKEN` the API does not start and the CLI below is the only interface.
 
 #### Start the relay:
 ```bash
-npm start
+ADMIN_TOKEN=$(openssl rand -hex 32) npm start
 ```
 
 You'll see:
 ```
-✅ Admin API listening on port 8000
+✅ Admin API listening on 127.0.0.1:8000
    Documentation: http://localhost:8000/admin/help
 ```
 
@@ -21,7 +21,7 @@ You'll see:
 
 ##### Get Statistics
 ```bash
-curl http://localhost:8000/admin/stats
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/stats
 ```
 
 **Response:**
@@ -46,12 +46,12 @@ curl http://localhost:8000/admin/stats
 
 ##### List All Registrations
 ```bash
-curl http://localhost:8000/admin/registrations
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/registrations
 ```
 
 ##### Filter by Tag
 ```bash
-curl "http://localhost:8000/admin/registrations?tag=pombo/chat"
+curl -H "Authorization: Bearer $ADMIN_TOKEN" "http://localhost:8000/admin/registrations?tag=pombo/chat"
 ```
 
 **Response:**
@@ -73,7 +73,7 @@ curl "http://localhost:8000/admin/registrations?tag=pombo/chat"
 
 ##### Get Recent Events
 ```bash
-curl "http://localhost:8000/admin/events?limit=50"
+curl -H "Authorization: Bearer $ADMIN_TOKEN" "http://localhost:8000/admin/events?limit=50"
 ```
 
 **Response:**
@@ -97,7 +97,7 @@ curl "http://localhost:8000/admin/events?limit=50"
 
 ##### Delete All Tokens for a Tag
 ```bash
-curl -X DELETE http://localhost:8000/admin/registrations/pombo/chat
+curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/registrations/pombo/chat
 ```
 
 **Response:**
@@ -270,12 +270,12 @@ node admin-cli.js export
 
 ### Check if relay is healthy
 ```bash
-curl http://localhost:8000/admin/stats | jq '.registrations, .pushesToday'
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/stats | jq '.registrations, .pushesToday'
 ```
 
 ### Monitor specific tag
 ```bash
-curl "http://localhost:8000/admin/registrations?tag=pombo/chat" | jq '.count'
+curl -H "Authorization: Bearer $ADMIN_TOKEN" "http://localhost:8000/admin/registrations?tag=pombo/chat" | jq '.count'
 ```
 
 ### Cleanup old devices (once per week)
@@ -290,12 +290,12 @@ node admin-cli.js export
 
 ### Remove problematic tag
 ```bash
-curl -X DELETE http://localhost:8000/admin/registrations/pombo/spam
+curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/registrations/pombo/spam
 ```
 
 ### Check for errors
 ```bash
-curl "http://localhost:8000/admin/events?limit=200" | jq '.events[] | select(.event | test("error|failed"))'
+curl -H "Authorization: Bearer $ADMIN_TOKEN" "http://localhost:8000/admin/events?limit=200" | jq '.events[] | select(.event | test("error|failed"))'
 ```
 
 ---
@@ -315,23 +315,15 @@ Or in `.env`:
 ADMIN_PORT=9000
 ```
 
-To disable the Admin API entirely, set `ADMIN_PORT=0` — the offline CLI (`admin-cli.js`) keeps working without it.
+To disable the Admin API entirely, leave `ADMIN_TOKEN` unset or set `ADMIN_PORT=0`. The offline CLI (`admin-cli.js`) keeps working without it.
 
 ---
 
 ## Security Notes
 
-⚠️ **The Admin API is currently open to all clients on the network!**
-
-For production:
-- Add authentication (JWT token in header)
-- Only allow localhost access (set `127.0.0.1` in listen)
-- Use firewall rules to restrict access
-
-Example (port 8000 only for localhost):
-```javascript
-adminServer.listen(ADMIN_PORT, '127.0.0.1');
-```
+- The Admin API binds to `127.0.0.1` by default. Set `ADMIN_HOST` only if you need another interface, and firewall the port if you do.
+- The API sends no CORS headers, so browser pages on other origins cannot read its responses.
+- Treat `ADMIN_TOKEN` as a secret: it can list and delete registrations.
 
 ---
 
@@ -348,7 +340,7 @@ node admin-cli.js list
 ### Can't connect to API
 ```bash
 # Check if relay is running
-curl http://localhost:8000/admin/stats
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/stats
 
 # Check if port is in use
 lsof -i :8000  # macOS/Linux
@@ -361,5 +353,5 @@ netstat -ano | findstr :8000  # Windows
 node admin-cli.js delete pombo/chat --force
 
 # Or use API
-curl -X DELETE http://localhost:8000/admin/registrations/pombo/chat
+curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/registrations/pombo/chat
 ```
