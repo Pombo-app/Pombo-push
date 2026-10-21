@@ -16,6 +16,7 @@ import path from 'path';
 import http from 'http';
 import nodeCrypto from 'crypto';
 import { EventEmitter } from 'events';
+import { createWakeGuard } from './wakeGuard.js';
 
 // Increase max listeners to prevent memory leak warnings from Streamr SDK
 // (Streamr creates many abort listeners internally)
@@ -34,7 +35,8 @@ const config = {
         email: process.env.VAPID_EMAIL || 'admin@example.com'
     },
     powDifficulty: parseInt(process.env.POW_DIFFICULTY || '4'),
-    pushStreamId: process.env.PUSH_STREAM_ID || 'pombo/push/notifications'
+    pushStreamId: process.env.PUSH_STREAM_ID || 'pombo/push/notifications',
+    wakeRatePerMinute: parseInt(process.env.WAKE_RATE_PER_MINUTE || '20'),
 };
 
 // ============================================
@@ -67,6 +69,9 @@ function validateConfig() {
 }
 
 validateConfig();
+
+const wakeGuard = createWakeGuard({ ratePerMinute: config.wakeRatePerMinute });
+const deferredWakes = new Map();
 
 // ============================================
 // DATABASE (SQLite)
@@ -648,6 +653,25 @@ async function handleNotification(payload) {
             return;
         }
         
+        if (wakeGuard.isReplay(pow)) {
+            console.log(`⚠️  Replayed PoW for tag ${tag}`);
+            logEvent('pow_replay', tag);
+            return;
+        }
+        
+        await deliverWake(tag, channelType);
+    } catch (e) {
+        console.error('❌ Error processing notification:', e.message);
+        logEvent('notification_error', e.message);
+    }
+}
+
+/**
+ * Tags are shared by many channels, so a throttled wake is coalesced into one later
+ * push, never dropped; 'keys' and message wakes are handled differently by clients.
+ */
+async function deliverWake(tag, channelType) {
+    try {
         // Find tokens with this tag
         const tokens = db.prepare(
             'SELECT push_token FROM registrations WHERE tag = ?'
@@ -655,6 +679,20 @@ async function handleNotification(payload) {
         
         if (tokens.length === 0) {
             console.log(`❌ No tokens found for tag ${tag}`);
+            return;
+        }
+        
+        const deferKey = `${tag}|${channelType}`;
+        const waitMs = wakeGuard.take(tag);
+        if (waitMs > 0) {
+            if (!deferredWakes.has(deferKey)) {
+                console.log(`⏳ Wake for tag ${tag} deferred ${waitMs} ms (rate limit)`);
+                logEvent('wake_deferred', tag);
+                deferredWakes.set(deferKey, setTimeout(() => {
+                    deferredWakes.delete(deferKey);
+                    deliverWake(tag, channelType);
+                }, waitMs));
+            }
             return;
         }
         
@@ -688,6 +726,7 @@ async function handleNotification(payload) {
 setInterval(() => {
     const stats = getStats();
     console.log(`📊 Stats: ${stats.registrations} devices, ${stats.pushesToday} pushes (24h)`);
+    wakeGuard.sweep();
 }, 60000);
 
 // Health check - verify relay is still connected (every 5 minutes)

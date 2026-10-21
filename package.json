@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node index.js",
     "generate-keys": "node scripts/generate-keys.js",
-    "test": "node scripts/test-push.js"
+    "test": "node scripts/test-push.js",
+    "test:unit": "node --test test/"
   },
   "keywords": [
     "pombo",
