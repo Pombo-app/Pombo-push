@@ -34,7 +34,9 @@ npm start
 | `VAPID_EMAIL` | no | Contact email included in push requests |
 | `POW_DIFFICULTY` | no | Proof-of-Work requirement for wake signals (default `4` = hash starts with `0000`) |
 | `PUSH_STREAM_ID` | no | Streamr stream to listen on. The code default is a placeholder: with it the relay starts cleanly, listens to an empty stream, and never delivers anything — set it to the live Pombo push stream |
+| `ADMIN_TOKEN` | no | Bearer token for the admin API. Without it the admin API does not start |
 | `ADMIN_PORT` | no | Admin API port (default `8000`; set `0` to disable the admin API entirely) |
+| `ADMIN_HOST` | no | Interface the admin API binds to (default `127.0.0.1`) |
 | `FCM_SERVICE_ACCOUNT` | no | Path to (or inline JSON of) a Firebase service-account key. Enables native FCM push for the Android app. Without it, the relay serves Web Push clients exactly as before and rejects native registrations. **This key is a secret — keep it outside the repo folder and never commit it** |
 
 VAPID keys are the relay's identity to browsers: if you rotate them, every device must re-register for push. Back up your `.env` and `data/tokens.db`.
@@ -56,7 +58,7 @@ npm test
 
 The relay ships with an admin HTTP API (port `ADMIN_PORT`) and an offline CLI (`admin-cli.js`). See [ADMIN_COMMANDS.md](ADMIN_COMMANDS.md).
 
-⚠️ The admin API is unauthenticated and binds to all interfaces. Firewall the port to localhost, or set `ADMIN_PORT=0` and use the CLI instead.
+The admin API only starts when `ADMIN_TOKEN` is set, binds to `127.0.0.1` by default, and requires `Authorization: Bearer <ADMIN_TOKEN>` on every request. Leaving `ADMIN_TOKEN` unset and using the CLI is the safest option.
 
 ## Running in the background
 

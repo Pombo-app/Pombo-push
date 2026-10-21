@@ -713,11 +713,24 @@ setInterval(() => {
 // ============================================
 
 const ADMIN_PORT = process.env.ADMIN_PORT ? parseInt(process.env.ADMIN_PORT) : 8000;
+const ADMIN_HOST = process.env.ADMIN_HOST || '127.0.0.1';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 // Skip admin API if port is 0
 if (ADMIN_PORT === 0) {
     console.log('ℹ️  Admin API disabled (ADMIN_PORT=0)');
+} else if (!ADMIN_TOKEN) {
+    console.log('ℹ️  Admin API disabled (ADMIN_TOKEN not set)');
 } else {
+    const adminTokenHash = nodeCrypto.createHash('sha256').update(ADMIN_TOKEN).digest();
+
+    function isAuthorized(req) {
+        const match = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+        if (!match) return false;
+        const given = nodeCrypto.createHash('sha256').update(match[1]).digest();
+        return nodeCrypto.timingSafeEqual(given, adminTokenHash);
+    }
+
     function sendJSON(res, statusCode, data) {
         res.writeHead(statusCode, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(data, null, 2));
@@ -728,15 +741,8 @@ if (ADMIN_PORT === 0) {
     }
 
     const adminServer = http.createServer((req, res) => {
-        // Enable CORS
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-        
-        if (req.method === 'OPTIONS') {
-            res.writeHead(200);
-            res.end();
-            return;
+        if (!isAuthorized(req)) {
+            return sendError(res, 401, 'Unauthorized');
         }
         
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -849,11 +855,11 @@ if (ADMIN_PORT === 0) {
                     'GET /admin/help': 'This help message'
                 },
                 examples: {
-                    stats: `curl http://localhost:${ADMIN_PORT}/admin/stats`,
-                    listAll: `curl http://localhost:${ADMIN_PORT}/admin/registrations`,
-                    listTag: `curl "http://localhost:${ADMIN_PORT}/admin/registrations?tag=pombo/chat"`,
-                    events: `curl "http://localhost:${ADMIN_PORT}/admin/events?limit=100"`,
-                    delete: `curl -X DELETE http://localhost:${ADMIN_PORT}/admin/registrations/pombo/chat`
+                    stats: `curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:${ADMIN_PORT}/admin/stats`,
+                    listAll: `curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:${ADMIN_PORT}/admin/registrations`,
+                    listTag: `curl -H "Authorization: Bearer $ADMIN_TOKEN" "http://localhost:${ADMIN_PORT}/admin/registrations?tag=pombo/chat"`,
+                    events: `curl -H "Authorization: Bearer $ADMIN_TOKEN" "http://localhost:${ADMIN_PORT}/admin/events?limit=100"`,
+                    delete: `curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:${ADMIN_PORT}/admin/registrations/pombo/chat`
                 }
             });
         }
@@ -862,8 +868,8 @@ if (ADMIN_PORT === 0) {
         sendError(res, 404, 'Endpoint not found. Try /admin/help');
     });
 
-    adminServer.listen(ADMIN_PORT, () => {
-        console.log(`✅ Admin API listening on port ${ADMIN_PORT}`);
+    adminServer.listen(ADMIN_PORT, ADMIN_HOST, () => {
+        console.log(`✅ Admin API listening on ${ADMIN_HOST}:${ADMIN_PORT}`);
         console.log(`   Documentation: http://localhost:${ADMIN_PORT}/admin/help`);
     });
 
